@@ -1,6 +1,7 @@
 import IcecastMetadataReader from "./metadata-js/IcecastMetadataReader";
 import IcecastMetadataQueue from "./metadata-js/IcecastMetadataQueue";
 import StreamBuffer from "./StreamBuffer";
+import { createDecoder } from "minimp3-wasm";
 
 export default class MetadataPlayer {
   constructor({ onMetadataUpdate }) {
@@ -69,6 +70,25 @@ export default class MetadataPlayer {
     return this._appendSourceBuffer(this._streamBuffer.read);
   }
 
+  async _decodeToPCM(value) {
+    this._streamBuffer = new StreamBuffer(value.length);
+
+    for (let i = this._icecast.next(value); i.value; i = this._icecast.next()) {
+      if (i.value.stream) {
+        this._streamBuffer.append(i.value.stream);
+      } else {
+        // metadata things
+      }
+    }
+
+    const decoder = await createDecoder(
+      this._streamBuffer.read,
+      "/icecast-metadata-js/decoder.opt.wasm"
+    );
+    //return decoder.decode(0);
+    return this._streamBuffer.read;
+  }
+
   async _appendSourceBuffer(chunk) {
     this._sourceBuffer.appendBuffer(chunk);
 
@@ -104,7 +124,7 @@ export default class MetadataPlayer {
 
     this._playing = true;
     this._controller = new AbortController();
-
+    /*
     const streamPromise = this.fetchStream(endpoint);
 
     Promise.race([this.fetchMimeType(endpoint), streamPromise])
@@ -120,30 +140,55 @@ export default class MetadataPlayer {
           );
         }
       })
-      .then(async (res) => {
-        this._playPromise = this._audioElement.play();
+      */
+    this.fetchStream(endpoint).then(async (res) => {
+      this._playPromise = this._audioElement.play();
 
-        this._icecast = new IcecastMetadataReader({
-          icyMetaInt: parseInt(res.headers.get("Icy-MetaInt")) || metaInt,
+      this._icecast = new IcecastMetadataReader({
+        icyMetaInt: parseInt(res.headers.get("Icy-MetaInt")) || metaInt,
+      });
+
+      const reader = res.body.getReader();
+      const readerIterator = {
+        [Symbol.asyncIterator]: () => ({
+          next: () => reader.read(),
+        }),
+      };
+
+      let sourceArray = [];
+      let currentTime = 0;
+      let sourcePromise = Promise.resolve();
+      let audioContext = new AudioContext();
+
+      for await (const chunk of readerIterator) {
+        const result = await this._decodeToPCM(chunk);
+        const decodedAudio = await audioContext.decodeAudioData(result.buffer);
+
+        sourceArray[1] = audioContext.createBufferSource();
+        sourceArray[1].connect(audioContext.destination);
+        sourceArray[1].start(currentTime);
+
+        sourceArray[1].buffer = await decodedAudio;
+        currentTime += sourceArray[1].buffer.duration;
+
+        //console.log("audiocontext", audioContext.currentTime)
+        //console.log("", currentTime);
+
+        await sourcePromise;
+
+        sourcePromise = new Promise((resolve) => {
+          sourceArray[1].addEventListener("ended", () => resolve(), { once: true });
         });
 
-        const reader = res.body.getReader();
-        const readerIterator = {
-          [Symbol.asyncIterator]: () => ({
-            next: () => reader.read(),
-          }),
-        };
-
-        for await (const chunk of readerIterator) {
-          await this._readIcecastResponse(chunk);
-        }
-      })
-      .catch((e) => {
+        sourceArray.shift();
+      }
+    });
+    /*.catch((e) => {
         if (e.name !== "AbortError") {
           this._onMetadataUpdate(`Error Connecting: ${e.message}`);
         }
         this._destroyMediaSource();
-      });
+      });*/
   }
 
   stop() {
