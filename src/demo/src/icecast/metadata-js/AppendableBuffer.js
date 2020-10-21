@@ -20,7 +20,7 @@ const bufferFunction = (length) => new Uint8Array(length);
 /**
  * @description Stores a collection of buffers as an array.
  */
-export default class MetadataBuffer {
+export default class AppendableBuffer {
   constructor(expectedLength) {
     this._buffer = bufferFunction(expectedLength);
     this._length = 0;
@@ -34,7 +34,7 @@ export default class MetadataBuffer {
    * @type {Uint8Array} Returns all stored data
    */
   pop() {
-    return this._buffer;
+    return this._buffer.subarray(0, this._length);
   }
 
   push(data) {

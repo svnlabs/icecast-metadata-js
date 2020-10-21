@@ -1,7 +1,8 @@
 import IcecastMetadataReader from "./metadata-js/IcecastMetadataReader";
 import IcecastMetadataQueue from "./metadata-js/IcecastMetadataQueue";
-import StreamBuffer from "./StreamBuffer";
+import AppendableBuffer from "./metadata-js/AppendableBuffer";
 import { createDecoder } from "minimp3-wasm";
+import mp3Parser from "mp3-parser";
 
 export default class MetadataPlayer {
   constructor({ onMetadataUpdate }) {
@@ -53,40 +54,52 @@ export default class MetadataPlayer {
   }
 
   async _readIcecastResponse(value) {
-    this._streamBuffer = new StreamBuffer(value.length);
+    this._streamBuffer = new AppendableBuffer(value.length);
 
     for (let i = this._icecast.next(value); i.value; i = this._icecast.next()) {
       if (i.value.stream) {
-        this._streamBuffer.append(i.value.stream);
+        this._streamBuffer.push(i.value.stream);
       } else {
         const currentPosition = value.length - this._streamBuffer.length;
-        await this._appendSourceBuffer(this._streamBuffer.read);
+        await this._appendSourceBuffer(this._streamBuffer.pop());
 
-        this._streamBuffer = new StreamBuffer(currentPosition);
+        this._streamBuffer = new AppendableBuffer(currentPosition);
         this._onMetadata(i.value);
       }
     }
 
-    return this._appendSourceBuffer(this._streamBuffer.read);
+    return this._appendSourceBuffer(this._streamBuffer.pop());
   }
 
   async _decodeToPCM(value) {
-    this._streamBuffer = new StreamBuffer(value.length);
+    this._streamBuffer = new AppendableBuffer(value.length);
 
     for (let i = this._icecast.next(value); i.value; i = this._icecast.next()) {
       if (i.value.stream) {
-        this._streamBuffer.append(i.value.stream);
+        this._streamBuffer.push(i.value.stream);
       } else {
         // metadata things
       }
     }
 
+    /*
+    let lastFrame = this._streamBuffer.length
+    try {
+      lastFrame = mp3Parser.readLastFrame(
+        new DataView(this._streamBuffer.pop().buffer),
+        0,
+        true
+      );
+    } catch {}
+    */
+
     const decoder = await createDecoder(
-      this._streamBuffer.read,
+      this._streamBuffer.pop(),
       "/icecast-metadata-js/decoder.opt.wasm"
     );
     //return decoder.decode(0);
-    return this._streamBuffer.read;
+    return this._streamBuffer.pop();
+    //return this._streamBuffer.pop().subarray(0, lastFrame);
   }
 
   async _appendSourceBuffer(chunk) {
@@ -155,15 +168,29 @@ export default class MetadataPlayer {
         }),
       };
 
-      let sourceArray = [];
-      let currentTime = 0;
-      let sourcePromise = Promise.resolve();
       let audioContext = new AudioContext();
+
+      await audioContext.resume();
+      await audioContext.audioWorklet.addModule(
+        "icecast-metadata-js/bypass-processor.js"
+      );
+
+      const node = new AudioWorkletNode(audioContext, "bypass-processor", {
+        outputChannelCount: [2],
+      });
+      node.connect(audioContext.destination);
 
       for await (const chunk of readerIterator) {
         const result = await this._decodeToPCM(chunk);
         const decodedAudio = await audioContext.decodeAudioData(result.buffer);
 
+        const channels = [
+          decodedAudio.getChannelData(0).buffer,
+          decodedAudio.getChannelData(1).buffer,
+        ];
+
+        node.port.postMessage(channels, channels);
+        /*
         sourceArray[1] = audioContext.createBufferSource();
         sourceArray[1].connect(audioContext.destination);
         sourceArray[1].start(currentTime);
@@ -171,16 +198,15 @@ export default class MetadataPlayer {
         sourceArray[1].buffer = await decodedAudio;
         currentTime += sourceArray[1].buffer.duration;
 
-        //console.log("audiocontext", audioContext.currentTime)
-        //console.log("", currentTime);
-
         await sourcePromise;
 
         sourcePromise = new Promise((resolve) => {
-          sourceArray[1].addEventListener("ended", () => resolve(), { once: true });
+          sourceArray[1].addEventListener("ended", () => resolve(), {
+            once: true,
+          });
         });
 
-        sourceArray.shift();
+        sourceArray.shift();*/
       }
     });
     /*.catch((e) => {

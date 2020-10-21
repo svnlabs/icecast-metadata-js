@@ -14,7 +14,7 @@
     along with this program.  If not, see <https://www.gnu.org/licenses/>
 */
 
-import MetadataBuffer from "./MetadataBuffer";
+import MetadataBuffer from "./AppendableBuffer";
 
 class Stats {
   constructor() {
