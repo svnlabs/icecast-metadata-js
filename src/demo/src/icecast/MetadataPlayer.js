@@ -82,17 +82,6 @@ export default class MetadataPlayer {
       }
     }
 
-    /*
-    let lastFrame = this._streamBuffer.length
-    try {
-      lastFrame = mp3Parser.readLastFrame(
-        new DataView(this._streamBuffer.pop().buffer),
-        0,
-        true
-      );
-    } catch {}
-    */
-
     const decoder = await createDecoder(
       this._streamBuffer.pop(),
       "/icecast-metadata-js/decoder.opt.wasm"
